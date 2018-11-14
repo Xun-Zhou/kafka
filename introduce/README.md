@@ -66,6 +66,74 @@
      ![segment](https://github.com/Xun-Zhou/kafka/blob/master/introduce/segment.png "segment")
       
       “.index”索引文件存储大量的元数据，“.log”数据文件存储大量的消息，索引文件中的元数据指向对应数据文件中message的物理偏移地址。
-      以“.index”索引文件中的元数据[3, 348]为例，在“.log”数据文件表示第3个消息，即在全局partition中表示170410+3=170413个消息，该消息的物理偏移地址为348。
+      以“.index”索引文件中的元数据[3, 348]为例，在“.log”数据文件表示第3个消息，在全局partition中表示第170410+3=170413个消息，该消息的物理偏移地址为348。
+      
+      读取消息：以上图为例，读取offset=170418的消息，首先查找segment文件，
+      其中00000000000000000000.index为最开始的文件，
+      第二个文件为00000000000000170410.index(起始偏移为170410+1=170411)，
+      第三个文件为00000000000000239430.index(起始偏移为239430+1=239431)，
+      所以offset=170418在第二个文件之中。
+      其次根据00000000000000170410.index文件中的[8,1325]定位到00000000000000170410.log文件中的1325的位置进行读取。
+      消息都具有固定的物理结构，包括：offset(8 Bytes)、消息体的大小(4 Bytes)等字段，可以确定一条消息的大小，即读取到哪里截止，判断消息是否读完。
+- 复制原理和同步方式
+      
+      topic的每个partition有一个预写式的日志文件，虽然partition可以继续细分为若干个segment文件，但是对于上层应用来说可以将partition看成最小的存储单元，
+      每个partition都由一些列有序的、不可变的消息组成，这些消息被连续的追加到partition中。
 
-    
+![partition_log](https://github.com/Xun-Zhou/kafka/blob/master/introduce/partition_log.png "partition_log")
+
+      LEO:LogEndOffset表示每个partition的log最后一条Message的位置
+      HW:每个replica都有HW,leader和follower各自负责更新自己的HW的状态。
+      对于leader新写入的消息，consumer不能立刻消费，leader会等待该消息被所有的flower同步后更新HW，此时消息才能被consumer消费。
+      这样就保证了如果leader所在的broker失效，该消息仍然可以从新选举的leader中获取。对于来自内部broKer的读取请求，没有HW的限制。
+      flower在做同步操作的时候，先将log文件截断到之前自己的HW的位置，之后再从leader中拉取消息进行同步。
+      
+      为了提高消息的可靠性，Kafka每个topic的partition有N个副本(replicas)，其中N(大于等于1)是topic的复制因子(replica fator)的个数。
+      Kafka通过多副本机制实现故障自动转移，当Kafka集群中一个broker失效情况下仍能保证服务可用。
+      在Kafka中发生复制时确保partition的日志能有序地写到其他节点上，N个replicas中，其中一个replica为leader，其他都为follower, 
+      leader处理partition的所有读写请求，与此同时，follower会被动定期地去复制leader上的数据。
+      
+      ISR:副本同步队列
+      副本数对Kafka的吞吐率是有一定的影响，但极大的增强了可用性。默认情况下Kafka的replica数量为1，即每个partition都有一个唯一的leader，为了确保消息的可靠性，
+      通常应用中将其值(bin/server.server.properties offsets.topic.replication.factor指定)大小设置为大于1。 
+      所有的副本(replicas)统称为Assigned Replicas，即AR。ISR是AR中的一个子集，由leader维护ISR列表(follower同步leader完成写入ISR)，
+      follower从leader同步数据有一些延迟
+      (包括延迟时间replica.lag.time.max.ms和延迟条数replica.lag.max.messages两个维度, 当前最新的版本0.10.x中只支持replica.lag.time.max.ms这个维度)，
+      超过任意一个阈值都会把follower剔除出ISR, 存入OSR(Outof-Sync Replicas)列表，新加入的follower也会先存放在OSR中。
+      AR=ISR+OSR。ISR中包括：leader和follower。Kafka的ISR的管理最终都会反馈到Zookeeper节点上。
+- 数据可靠性和持久性保证
+      
+      1(默认)：producer发送消息leader成功接收立即返回确认，producer收到确认后发送下一条message。如果leader宕机了，则会丢失数据(follower未复制消息)。
+      0：这意味着producer无需等待来自broker的确认而继续发送下一批消息。这种情况下数据传输效率最高，但是数据可靠性确是最低的。
+      -1：producer需要等待所有follower都确认接收到数据后才算一次发送完成，可靠性最高，没有follow的情况下就成了默认的情况。
+      
+     - request.required.acks=1
+         
+      producer发送数据到leader，leader写本地日志成功，返回客户端成功;此时follow还没有同步该消息，leader就宕机了，那么此次发送的消息就会丢失。
+      
+     - request.required.acks=-1
+     
+      同步(Kafka默认为同步，即producer.type=sync)的发送模式，replication.factor>=2且min.insync.replicas>=2的情况下，不会丢失数据。
+      有两种典型情况：
+      1.数据发送到leader, follower全部完成数据同步后，leader此时挂掉，那么会选举出新的leader，数据不会丢失。
+      2.数据发送到leader后 ，部分follow同步，leader此时挂掉。比如follower1和follower2都有可能变成新的leader, producer端会得到返回异常，producer端会重新发送数据，数据可能会重复。
+- Leader选举
+
+      Kafka在Zookeeper中为每一个partition动态的维护了一个ISR，这个ISR里的所有replica都跟上了leader，
+      只有ISR里的成员才能有被选为leader的可能。
+      在这种模式下，对于f+1个副本，一个Kafka topic能在保证不丢失已经commit消息的前提下容忍f个副本的失败，在大多数使用场景下，这种模式是十分有利的。
+        
+      当partition的所有replica都挂了，就无法保证数据不丢失了。这种情况下有两种可行的方案：
+      1.unclean.leader.election.enable=false
+      等待ISR中任意一个replica“活”过来，并且选它作为leader
+      2.unclean.leader.election.enable=true
+      选择第一个“活”过来的replica(并不一定是在ISR中)作为leader
+      Kafka默认采用第二种策略
+
+      实例分析：
+      假设某个partition中的flower为3，replica-0, replica-1, replica-2分别存放在broker0, broker1和broker2中。AR=(0,1,2)，ISR=(0,1)
+      设置request.required.acks=-1, min.insync.replicas=2，unclean.leader.election.enable=false
+      当ISR中的replica-0出现crash的情况时，broker1选举为新的leader[ISR=(1)]，因为受min.insync.replicas=2影响，write不能服务，但是read能继续正常服务。
+      此种情况恢复方案：
+            1.尝试恢复replica-0，如果能起来，系统正常;
+            2.如果replica-0不能恢复，需要将min.insync.replicas设置为1，恢复write功能。
