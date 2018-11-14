@@ -1,7 +1,7 @@
-#kafka概述
+# kafka概述
 
     Kakfa是由LinkedIn公司开发的一个分布式的消息系统，后成为Apache顶级开源项目，它使用Scala编写，以可水平扩展和高吞吐率的特性而被广泛使用。
-##Kafka体系架构
+## Kafka体系架构
 
 ![Kafka体系架构](https://github.com/Xun-Zhou/kafka/blob/master/introduce/kafka-apis.png "Kafka体系架构")
 
@@ -18,7 +18,7 @@
       ConsumerGroup:每个consumer都属于一个特定的consumerGroup,每个consumerGroup都能获取到topic下的所有partition中的消息，
       一个partition中的一条消息只会被consumerGroup中的一个consumer消费,
       partition到group类似广播，group到consumer类似轮询
-##Topic & Partition
+## Topic & Partition
 
     一个topic可以看做一类消息，每个topic可以分成多个partition，每个partition在存储层面是append log文件。
     任何发布到partition的消息都会被追加到log文件的尾部，每条消息在文件中的位置称为offset(偏移量)，offset为一个long型的数字，它唯一标记一条消息。
@@ -30,7 +30,7 @@
     如果partition规则设置的合理，所有消息可以均匀分布到不同的partition里，这样就实现了水平扩展。
     (如果一个topic对应一个日志文件，那这个文件所在的机器I/O将会成为这个topic的性能瓶颈，而partition解决了这个问题)。
     在创建topic时可以在/config/server.properties中配置(num.partitions)中指定这个partition的数量，当然也可以在topic创建之后去修改partition的数量。
-##高可靠性存储分析
+## 高可靠性存储分析
 
     Kafka的高可靠性的保障来源于其健壮的副本(replication)策略。通过调节其副本相关参数，可以使得Kafka在性能和可靠性之间平衡。
     Kafka从0.8.x版本开始提供partition级别的复制,replication的数量可以在/config/server.properties中配置(default.replication.refactor)。
