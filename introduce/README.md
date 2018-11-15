@@ -133,7 +133,46 @@
       实例分析：
       假设某个partition中的flower为3，replica-0, replica-1, replica-2分别存放在broker0, broker1和broker2中。AR=(0,1,2)，ISR=(0,1)
       设置request.required.acks=-1, min.insync.replicas=2，unclean.leader.election.enable=false
-      当ISR中的replica-0出现crash的情况时，broker1选举为新的leader[ISR=(1)]，因为受min.insync.replicas=2影响，write不能服务，但是read能继续正常服务。
-      此种情况恢复方案：
+     - 当ISR中的replica-0出现crash的情况时，broker1选举为新的leader[ISR=(1)]，因为受min.insync.replicas=2影响，write不能服务，但是read能继续正常服务
+            
+            此种情况恢复方案：
             1.尝试恢复replica-0，如果能起来，系统正常;
             2.如果replica-0不能恢复，需要将min.insync.replicas设置为1，恢复write功能。
+     - 当ISR中的replica-0出现crash，紧接着replica-1也出现了crash, 此时[ISR=(1),leader=-1],不能对外提供服务
+            
+            此种情况恢复方案：
+            1.尝试恢复replica-0和replica-1，如果都能恢复，则系统恢复正常;
+            2.如果replica-0恢复，而replica-1不能恢复，这时候仍然不能选出leader，因为设置unclean.leader.election.enable=false，leader只能从ISR中选举，
+            当ISR中所有副本都失效之后，需要ISR中最后失效的那个副本能恢复之后才能选举leader, 即replica-0先失效，replica-1后失效，需要replica-1恢复后才能选举leader(replica-1为leader)。
+            保守的方案建议设置unclean.leader.election.enable=true，但是这样会有丢失数据的情况发生，这样可以恢复read服务。同样需要将min.insync.replicas设置为1，恢复write功能;
+     - 当ISR中的replica-0, replica-1同时宕机,此时[ISR=(0,1)]，不能对外提供服务
+        
+            此种情况恢复方案：尝试恢复replica-0和replica-1，当其中任意一个副本恢复正常时，对外可以提供read服务。
+            直到2个副本恢复正常，write功能才能恢复，或者将将min.insync.replicas设置为1。
+- Kafka的发送模式
+        
+      Kafka的发送模式由producer端的配置参数producer.type来设置，这个参数指定了消息的发送方式是同步的还是异步的，默认是同步的方式，producer.type=sync
+      如果设置成异步的模式，producer.type=async，producer可以以batch的形式push数据，这样会极大的提高broker的性能，但是这样会增加丢失数据的风险
+      对于异步模式，可以配置参数：
+      batch.size int 16384：多个消息被发送到同一分区时，生产者将尝试将消息一起批量处理为更少的请求。这有助于提升客户端和服务器上的性能
+      
+- 消息传输保障
+      
+      Kafka为确保消息在producer和consumer之间传输。有以下三种可能的传输保障(delivery guarantee):
+      1.At most once：消息可能会丢，但绝不会重复传输
+      2.At least once：消息绝不会丢，但可能会重复传输
+      3.Exactly once：每条消息肯定会被传输一次且仅传输一次
+      
+      Kafka的消息传输保障机制非常直观。当producer向broker发送消息时，一旦这条消息被commit，由于副本机制(replication)的存在，它就不会丢失。
+      但是如果producer发送消息给broker后，遇到的网络问题而造成通信中断，那producer就无法判断该条消息是否已经提交(commit)。
+      但是producer可以retry多次，确保消息已经正确传输到broker中，目前Kafka实现的是at least once。
+      
+      consumer从broker中读取消息后，可以选择commit，该操作会在Zookeeper中存下该consumer在该partition下读取的消息的offset。该consumer下一次再读取该partition时会从下一条开始读取。
+      如未commit，下一次读取的开始位置会跟上一次commit之后的开始位置相同。也可以将consumer设置为autocommit，即consumer一旦读取到数据立即自动commit。
+      如果只讨论这一读取消息的过程，那Kafka是确保了exactly once, 但是如果由于前面producer与broker之间的某种原因导致消息的重复，那么这里就是at least once。
+      
+      当consumer读完消息之后先commit再处理消息，在这种模式下，如果consumer在commit后还没来得及处理消息就crash了，下次重新开始工作后就无法读到刚刚已提交而未处理的消息，这就对应于at most once了。
+      
+      当consumer读完消息之后先处理再commit。这种模式下，如果消息在commit之前consumer crash了，下次读取时还会读取到未commit的消息，实际上该消息已经被处理过了，这就对应于at least once。
+      
+      要做到exactly once就需要引入消息去重机制，建议根据业务自身特性，或者借助redis等其他工具做去重处理。
