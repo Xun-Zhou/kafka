@@ -23,6 +23,12 @@
     一个topic可以看做一类消息，每个topic可以分成多个partition，每个partition在存储层面是append log文件。
     任何发布到partition的消息都会被追加到log文件的尾部，每条消息在文件中的位置称为offset(偏移量)，offset为一个long型的数字，它唯一标记一条消息。
     每条消息都被append到partition中，是线性写磁盘，因此效率非常高(经验证，线性写磁盘效率比随机写内存要高，这是Kafka高吞吐率的一个很重要的保证)。
+    partition分配到broker上使用的是简单的取模运算：
+    topic test有 p0,p1,p2,p3四个分区，有三台broker b1,b2,b3。那么分区分配到broker上面的策略就是
+    b1:p0,p3
+    b2:p1
+    b3:p2
+    topic排序后所在序号对broker的size取模，结果就是所在broker
 
 ![KafkaTopic & Partition](https://github.com/Xun-Zhou/kafka/blob/master/introduce/log_anatomy.png "KafkaTopic & Partition")
 
