@@ -20,7 +20,7 @@ import java.util.Map;
 @EnableKafka
 public class KafkaConsumerConfig {
 
-    @Value("${kafka.consumer.servers}")
+    @Value("${kafka.servers}")
     private String servers;
     @Value("${kafka.consumer.enable.auto.commit}")
     private boolean enableAutoCommit;

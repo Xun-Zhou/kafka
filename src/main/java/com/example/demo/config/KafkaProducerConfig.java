@@ -16,7 +16,7 @@ import java.util.Map;
 @Configuration
 @EnableKafka
 public class KafkaProducerConfig {
-    @Value("${kafka.producer.servers}")
+    @Value("${kafka.servers}")
     private String servers;
     @Value("${kafka.producer.retries}")
     private int retries;
