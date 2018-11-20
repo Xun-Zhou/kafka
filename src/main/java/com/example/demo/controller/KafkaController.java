@@ -17,7 +17,7 @@ public class KafkaController {
     private KafkaTemplate kafkaTemplate;
 
     @RequestMapping(value = "/send", method = RequestMethod.GET)
-    public void sendKafka(HttpServletRequest request, HttpServletResponse response) {
+    public void sendMessage(HttpServletRequest request, HttpServletResponse response) {
         String message = request.getParameter("message");
         kafkaTemplate.send("test", "key", message);
         System.out.println("发送成功");
